@@ -6,6 +6,8 @@ from pybullet_utils import bullet_client as bc
 from simple_driving.resources.car import Car
 from simple_driving.resources.plane import Plane
 from simple_driving.resources.goal import Goal
+from simple_driving.resources.obstacle import Obstacle
+
 import matplotlib.pyplot as plt
 import time
 
@@ -22,9 +24,9 @@ class SimpleDrivingEnv(gym.Env):
             self.action_space = gym.spaces.box.Box(
                 low=np.array([-1, -.6], dtype=np.float32),
                 high=np.array([1, .6], dtype=np.float32))
-        self.observation_space = gym.spaces.box.Box(
-            low=np.array([-40, -40], dtype=np.float32),
-            high=np.array([40, 40], dtype=np.float32))
+        self.observation_space = gym.spaces.Box(
+            low=np.array([-40, -40, -40, -40], dtype=np.float32),
+            high=np.array([40, 40, 40, 40], dtype=np.float32))
         self.np_random, _ = gym.utils.seeding.np_random()
 
         if renders:
@@ -84,6 +86,17 @@ class SimpleDrivingEnv(gym.Env):
             #print("reached goal")
             self.done = True
             self.reached_goal = True
+            reward += 50 # added for the reqard bonus
+
+        if hasattr(self, 'obstacle'):
+            obstacle_pos, _ = self._p.getBasePositionAndOrientation(self.obstacle)
+            dist_to_obstacle = math.sqrt((carpos[0] - obstacle_pos[0])**2 + (carpos[1] - obstacle_pos[1])**2)
+
+            if dist_to_obstacle < 1.0:
+                reward -= 10
+                if dist_to_obstacle < 0.3:
+                    reward -= 50
+                    self.done = True
 
         ob = car_ob
         return ob, reward, self.done, dict()
@@ -96,10 +109,18 @@ class SimpleDrivingEnv(gym.Env):
         self._p.resetSimulation()
         self._p.setTimeStep(self._timeStep)
         self._p.setGravity(0, 0, -10)
+
+        x = self.np_random.uniform(-4, 4)
+        y = self.np_random.uniform(-4, 4)
+        self.obstacle = Obstacle(self._p, position=[x, y]).obstacle
+        
         # Reload the plane and car
         Plane(self._p)
         self.car = Car(self._p)
         self._envStepCounter = 0
+
+
+
 
         # Set the goal to a random target
         x = (self.np_random.uniform(5, 9) if self.np_random.integers(2) else
@@ -177,13 +198,21 @@ class SimpleDrivingEnv(gym.Env):
             return np.array([])
 
     def getExtendedObservation(self):
-        # self._observation = []  #self._racecar.getObservation()
         carpos, carorn = self._p.getBasePositionAndOrientation(self.car.car)
         goalpos, goalorn = self._p.getBasePositionAndOrientation(self.goal_object.goal)
+
+        # Transform goal position into car's local frame
         invCarPos, invCarOrn = self._p.invertTransform(carpos, carorn)
-        goalPosInCar, goalOrnInCar = self._p.multiplyTransforms(invCarPos, invCarOrn, goalpos, goalorn)
+        goalPosInCar, _ = self._p.multiplyTransforms(invCarPos, invCarOrn, goalpos, goalorn)
 
         observation = [goalPosInCar[0], goalPosInCar[1]]
+
+        # Add obstacle position relative to the car if it exists
+        if hasattr(self, 'obstacle'):
+            obstacle_pos, obstacle_orn = self._p.getBasePositionAndOrientation(self.obstacle)
+            obstaclePosInCar, _ = self._p.multiplyTransforms(invCarPos, invCarOrn, obstacle_pos, obstacle_orn)
+            observation.extend([obstaclePosInCar[0], obstaclePosInCar[1]])
+
         return observation
 
     def _termination(self):
